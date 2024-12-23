@@ -7,7 +7,7 @@ weights_path = r"D:\self\tracker_cat\app\yolo\yolov3-tiny.weights"
 cfg_path = r"D:\self\tracker_cat\app\yolo\yolov3-tiny.cfg"
 net = cv2.dnn.readNetFromDarknet(cfg_path, weights_path)
 
-net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+net.setPreferableBackend(cv2.dnn.DNN_TARGET_CPU)
 net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
 imread = cv2.imread("D:\\1202017149.jpg")
@@ -19,7 +19,7 @@ net.setInput(blob)
 layer_names = net.getLayerNames()
 output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
 
-outputs = net.forward(output_layers)
+outputs = net.forward(output_layers[0])
 
 # 处理检测结果
 boxes = []
@@ -27,7 +27,7 @@ confidences = []
 class_ids = []
 for output in outputs:
     for detection in output:
-        scores = detection[5:]
+        scores = detection
         class_id = np.argmax(scores)
         confidence = scores[class_id]
         if confidence > 0.5:
@@ -46,9 +46,9 @@ for i in indices:
     box = boxes[i]
     (x, y) = (box[0], box[1])
     (w, h) = (box[2], box[3])
-    cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    cv2.rectangle(imread, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
 # 显示结果
-cv2.imshow("Image", image)
+cv2.imshow("Image", imread)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
