@@ -26,8 +26,13 @@ class CsrtVideoStream:
         self.interval = interval
         self.frames = queue.PriorityQueue()
 
-
     def track(self, frame, bbox):
+        """
+        跟踪选定框
+        TODO 每隔 XX帧/秒，重新标记
+        :param frame: 帧
+        :param bbox: 标记框
+        """
         self.tracker.init(frame, bbox)
         self._track()
         self.queue.join()
@@ -73,9 +78,18 @@ class CsrtVideoStream:
             self.frames.put((time_ns, frame))
         self.queue.task_done()
 
-    def get_frame(self, blocking=True, timeout=None):
+    def next_track_frame(self, blocking=True, timeout=None):
+        """
+        获取处理后的下一帧（若开启了save_frames）
+        :param blocking: 阻塞获取
+        :param timeout: 超时时间
+        :return: 下一帧
+        """
         return self.frames.get(blocking, timeout) if self.save_frames and not self.frames.empty() else (None,None)
 
     def release(self):
+        """
+        释放当前跟踪器的资源
+        """
         self.cap.release()
         cv2.destroyAllWindows()

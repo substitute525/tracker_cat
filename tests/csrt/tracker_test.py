@@ -19,7 +19,7 @@ if __name__ == '__main__':
     time_cost = time.time()
     print('track cost:', time_cost - time_time)
     while True:
-        _, frame = stream.get_frame()
+        _, frame = stream.next_track_frame()
         if frame is None:
             break
         cv2.imshow("Tracking", frame)

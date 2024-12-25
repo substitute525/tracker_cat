@@ -51,6 +51,14 @@ class IModel:
         """
 
 def yolo_most_like_box(model: IModel, file, class_id:int=None, confidence:float=0.5) -> (ndarray, list[int]):
+    """
+    yolo模型-最相似框
+    :param model: 模型对象
+    :param file: 文件（path/ndarray）
+    :param class_id: 类型id
+    :param confidence: 最低置信度
+    :return: (文件, 范围框)
+    """
     imread:ndarray = model.reset_blob(file)
     h, w = imread.shape[:2]
     layers = model.get_out_layers()
