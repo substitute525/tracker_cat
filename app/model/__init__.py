@@ -66,7 +66,7 @@ def yolo_most_like_box(model: IModel, file, class_id:int=None, confidence:float=
     outputs = model.forward(layers)
     class_names = model.class_names()
     boxes, confidences, class_ids = model.output_process(outputs, confidence=confidence, w=w, h=h, class_id=class_id)
-    if not class_id:
+    if not class_ids:
         return imread, None
     index = np.argmax(numpy.array(confidences))
     class_id = class_names[class_ids[index]]

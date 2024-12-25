@@ -39,11 +39,9 @@ class CsrtVideoStream:
 
     def _track(self):
         interval = count = 0
-        time_diff = 0
+        start = time.time()
         while True:
-            time_time = time.time()
             ret, frame = self.cap.read()
-            time_diff += time.time() - time_time
             # 抽帧
             if interval != self.interval:
                 interval += 1
@@ -57,11 +55,10 @@ class CsrtVideoStream:
                 self.queue.put(frame)
                 count += 1
                 self._pool_executor.submit(self._update, time.time_ns())
-                print(f"frame {count}")
             # 按 'q' 键退出
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-        print(f"time {time_diff}")
+        print(f"update frame:{count}, track time {time.time() - start}")
 
     def _update(self, time_ns):
         frame = self.queue.get(timeout=1)

@@ -49,10 +49,10 @@ class Yolo4(IModel):
             for detection in output:
                 scores = detection[5:]
                 if class_id is None:
-                    class_id = np.argmax(scores)
-                score = scores[class_id]
-                if score > 0:
-                    print(score)
+                    max_score_id = np.argmax(scores)
+                else:
+                    max_score_id = class_ids
+                score = scores[max_score_id]
                 if score >= confidence:
                     box = detection[:4] * np.array([w, h, w, h])
                     (centerX, centerY, width, height) = box.astype("int")
@@ -60,6 +60,6 @@ class Yolo4(IModel):
                     y = int(centerY - (height / 2))
                     boxes.append([x, y, int(width), int(height)])
                     confidences.append(float(score))
-                    class_ids.append(class_id)
+                    class_ids.append(max_score_id)
         return boxes, confidences, class_ids
 
