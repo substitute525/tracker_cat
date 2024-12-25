@@ -1,14 +1,27 @@
 import queue
 import time
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
+from typing import Callable
 
 import cv2
+from numpy import ndarray
 
-if __name__ == '__main__':
-    help(cv2.selectROI)
-
+class InitStrategy(Enum):
+    """
+    重新标记策略
+    """
+    BY_SECONDS = 1  # 按秒
+    BY_UPDATE = 2   # 按更新次数
+    WHEN_FREE = 3   # 当空闲时（可指定最小时间间隔和最大间隔）
+    WHEN_LOST = 4   # 当跟踪失败时（可指定最小时间间隔和最大间隔）
 
 class CsrtVideoStream:
+    cap = None
+    tracker = None
+    queue = None
+
+
     def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1):
         """
         初始化CSRT追踪算法
@@ -23,16 +36,43 @@ class CsrtVideoStream:
         self.queue = queue.Queue(maxsize=(parallelism if parallelism >= 1 else 0))
         self._pool_executor = ThreadPoolExecutor(max_workers=parallelism)
         self.save_frames = save_frames
-        self.interval = interval
+        self.frame_interval = interval
         self.frames = queue.PriorityQueue()
 
-    def track(self, frame, bbox):
+    def re_init_strategy(self, strategy: InitStrategy, **kwargs):
+        """
+        重计算策略
+        :param strategy: 计算策略
+        :param kwargs: 策略参数。
+        :return:
+        """
+        if strategy == InitStrategy.BY_SECONDS:
+            interval = kwargs.get('interval')
+            ...
+        elif strategy == InitStrategy.BY_UPDATE:
+            interval = kwargs.get('interval')
+            ...
+        elif strategy == InitStrategy.WHEN_FREE:
+            min_interval = kwargs.get('min_interval')
+            max_interval = kwargs.get('max_interval')
+            ...
+        elif strategy == InitStrategy.WHEN_LOST:
+            min_interval = kwargs.get('min_interval')
+            max_interval = kwargs.get('max_interval')
+            ...
+
+    def track(self, func: Callable[[ndarray], list[int]]):
         """
         跟踪选定框
-        TODO 每隔 XX帧/秒，重新标记
-        :param frame: 帧
-        :param bbox: 标记框
+        TODO 每隔 XX帧/秒，重新标记;在线程队列为空时计算（最大时间间隔，最小时间间隔）
+        :param func: 计算帧的目标区域
         """
+        ret, frame = self.cap.read()
+        if not ret:
+            return
+        bbox = func(frame)
+        if not bbox:
+            return
         self.tracker.init(frame, bbox)
         self._track()
         self.queue.join()
@@ -43,7 +83,7 @@ class CsrtVideoStream:
         while True:
             ret, frame = self.cap.read()
             # 抽帧
-            if interval != self.interval:
+            if interval != self.frame_interval:
                 interval += 1
                 continue
             else:
@@ -56,8 +96,8 @@ class CsrtVideoStream:
                 count += 1
                 self._pool_executor.submit(self._update, time.time_ns())
             # 按 'q' 键退出
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     break
         print(f"update frame:{count}, track time {time.time() - start}")
 
     def _update(self, time_ns):

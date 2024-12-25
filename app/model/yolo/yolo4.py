@@ -51,7 +51,7 @@ class Yolo4(IModel):
                 if class_id is None:
                     max_score_id = np.argmax(scores)
                 else:
-                    max_score_id = class_ids
+                    max_score_id = class_id
                 score = scores[max_score_id]
                 if score >= confidence:
                     box = detection[:4] * np.array([w, h, w, h])
