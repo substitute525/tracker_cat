@@ -1,14 +1,17 @@
 import typing as _typing
 
 import cv2
+import numpy
+import numpy as np
+from numpy import ndarray
 
 
 class IModel:
-    def reset_blob(self, file_path):
+    def reset_blob(self, file) -> _typing.Any:
         """
         重置模型解析的文件
 
-        :param file_path: 文件路劲
+        :param file: 文件或文件路径
         :return: blob
         """
         ...
@@ -20,7 +23,7 @@ class IModel:
         :return: 层数组
         """
 
-    def forward(self, layers: _typing.Sequence[str]):
+    def forward(self, layers: _typing.Sequence[str]) -> _typing.Any:
         """
         模型推理
 
@@ -37,7 +40,8 @@ class IModel:
         """
         ...
 
-    def output_process(self, outputs, confidence: float = 0.5, **kwargs):
+    def output_process(self, outputs, confidence: float = 0.5, **kwargs) -> tuple[
+        list[list[int]], list[float], list[int]]:
         """
         模型输出结果后置
 
@@ -46,18 +50,37 @@ class IModel:
         :return: (边框，置信度，类别)
         """
 
+def yolo_most_like_box(model: IModel, file, class_id:int=None, confidence:float=0.5) -> (ndarray, list[int]):
+    imread:ndarray = model.reset_blob(file)
+    h, w = imread.shape[:2]
+    layers = model.get_out_layers()
+    print(layers)
+    outputs = model.forward(layers)
+    class_names = model.class_names()
+    boxes, confidences, class_ids = model.output_process(outputs, confidence=confidence, w=w, h=h, class_id=class_id)
+    if not class_id:
+        return imread, None
+    index = np.argmax(numpy.array(confidences))
+    class_id = class_names[class_ids[index]]
+    print(confidences[index], class_id)
+    box = boxes[index]
+    return imread, box
+
+
+
 def example():
-    from yolo.yolo4 import Yolo4
+    from .yolo.yolo4 import Yolo4
     _yolo = Yolo4()
-    imread = _yolo.reset_blob(r"D:\Pictures\1202017149.jpg")
-    h, w = imread[:2]
+    imread = _yolo.reset_blob(r"D:\IMG_20240831_234839.jpg")
+    h, w = imread.shape[:2]
     layers = _yolo.get_out_layers()
+    print(layers)
     outputs = _yolo.forward(layers)
     class_names = _yolo.class_names()
-    boxes, confidences, class_ids = _yolo.output_process(outputs, confidence=0.5, w=w, h=h)
+    boxes, confidences, class_ids = _yolo.output_process(outputs, confidence=0.1, w=w, h=h, class_id=15)
 
     # 非极大值抑制（NMS）过滤重叠框
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.1, 0.4)
     for i in indices:
         box = boxes[i]
         class_id = class_ids[i]
@@ -77,8 +100,5 @@ def example():
 
     imread = cv2.resize(imread, (int(w * f), int(h * f)))
     cv2.imshow("Image", imread)
-    cv2.waitKey(0)
+    cv2.waitKey()
     cv2.destroyAllWindows()
-
-if __name__ == '__main__':
-    example()
