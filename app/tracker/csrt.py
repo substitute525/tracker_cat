@@ -1,4 +1,5 @@
 import queue
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -20,7 +21,11 @@ class CsrtVideoStream:
     cap = None
     tracker = None
     queue = None
-
+    _reinit_func = None
+    wait_init = False
+    event = threading.Event()
+    threads = list[threading.Thread]
+    update_frames = 0
 
     def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1):
         """
@@ -39,18 +44,24 @@ class CsrtVideoStream:
         self.frame_interval = interval
         self.frames = queue.PriorityQueue()
 
-    def re_init_strategy(self, strategy: InitStrategy, **kwargs):
+    def re_init_strategy(self, strategy, **kwargs):
         """
-        重计算策略
+        重计算策略(多次调用会导致多个策略同时进行)
         :param strategy: 计算策略
         :param kwargs: 策略参数。
         :return:
         """
         if strategy == InitStrategy.BY_SECONDS:
             interval = kwargs.get('interval')
+            thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initBySeconds", args=(interval, strategy), daemon=True)
+            self.threads.append(thread)
+            thread.start()
             ...
         elif strategy == InitStrategy.BY_UPDATE:
             interval = kwargs.get('interval')
+            thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initBySeconds", args=(interval, strategy), daemon=True)
+            self.threads.append(thread)
+            thread.start()
             ...
         elif strategy == InitStrategy.WHEN_FREE:
             min_interval = kwargs.get('min_interval')
@@ -70,6 +81,7 @@ class CsrtVideoStream:
         ret, frame = self.cap.read()
         if not ret:
             return
+        self._reinit_func = func
         bbox = func(frame)
         if not bbox:
             return
@@ -78,7 +90,7 @@ class CsrtVideoStream:
         self.queue.join()
 
     def _track(self):
-        interval = count = 0
+        interval = 0
         start = time.time()
         while True:
             ret, frame = self.cap.read()
@@ -93,12 +105,15 @@ class CsrtVideoStream:
                 break
             else:
                 self.queue.put(frame)
-                count += 1
+                self.update_frames += 1
                 self._pool_executor.submit(self._update, time.time_ns())
+            if self.wait_init:
+                self.event.wait()
+                self.event.clear()
             # 按 'q' 键退出
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     break
-        print(f"update frame:{count}, track time {time.time() - start}")
+        print(f"update frame:{self.update_frames}, track time {time.time() - start}")
 
     def _update(self, time_ns):
         frame = self.queue.get(timeout=1)
@@ -130,3 +145,31 @@ class CsrtVideoStream:
         """
         self.cap.release()
         cv2.destroyAllWindows()
+
+    def _reinit_loop(self, interval: int, strategy: InitStrategy):
+        start = time.time()
+        while True:
+            if strategy == InitStrategy.BY_SECONDS:
+                if (time.time() - start) < interval:
+                    continue
+            elif strategy == InitStrategy.BY_UPDATE:
+                if self.update_frames % interval != 0:
+                    continue
+            print("start reinit")
+            # tread
+            self.wait_init = True
+            # 等待update完成
+            self.queue.join()
+            ret, init_frame = self.cap.read()
+            if not ret:
+                self.event.set()
+                return
+            bbox = self.reinit_func(init_frame)
+            if not bbox:
+                self.event.set()
+                return
+            self.tracker.init(init_frame, bbox)
+            self.wait_init = False
+            self.event.set()
+            start = time.time()
+            print("end reinit")
