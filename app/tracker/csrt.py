@@ -24,8 +24,9 @@ class CsrtVideoStream:
     _reinit_func = None
     wait_init = False
     event = threading.Event()
-    threads = list[threading.Thread]
+    threads = []
     update_frames = 0
+    _finished = False
 
     def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1):
         """
@@ -44,7 +45,7 @@ class CsrtVideoStream:
         self.frame_interval = interval
         self.frames = queue.PriorityQueue()
 
-    def re_init_strategy(self, strategy, **kwargs):
+    def re_init_strategy(self, strategy:InitStrategy, **kwargs):
         """
         重计算策略(多次调用会导致多个策略同时进行)
         :param strategy: 计算策略
@@ -75,9 +76,9 @@ class CsrtVideoStream:
     def track(self, func: Callable[[ndarray], list[int]]):
         """
         跟踪选定框
-        TODO 每隔 XX帧/秒，重新标记;在线程队列为空时计算（最大时间间隔，最小时间间隔）
         :param func: 计算帧的目标区域
         """
+        self._finished = False
         ret, frame = self.cap.read()
         if not ret:
             return
@@ -87,6 +88,7 @@ class CsrtVideoStream:
             return
         self.tracker.init(frame, bbox)
         self._track()
+        self._finished = True
         self.queue.join()
 
     def _track(self):
@@ -108,8 +110,10 @@ class CsrtVideoStream:
                 self.update_frames += 1
                 self._pool_executor.submit(self._update, time.time_ns())
             if self.wait_init:
+                print("等待重计算")
                 self.event.wait()
                 self.event.clear()
+                print("结束等待")
             # 按 'q' 键退出
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     break
@@ -149,11 +153,17 @@ class CsrtVideoStream:
     def _reinit_loop(self, interval: int, strategy: InitStrategy):
         start = time.time()
         while True:
+            if self._finished:
+                print(f"跟踪器已结束，更新策略：{strategy.name}退出")
+                return
+            if self.cap is None or not self.cap.isOpened():
+                print("no cap")
+                continue
             if strategy == InitStrategy.BY_SECONDS:
                 if (time.time() - start) < interval:
                     continue
             elif strategy == InitStrategy.BY_UPDATE:
-                if self.update_frames % interval != 0:
+                if self.update_frames % interval != 0 or self.update_frames == 0:
                     continue
             print("start reinit")
             # tread
@@ -162,12 +172,16 @@ class CsrtVideoStream:
             self.queue.join()
             ret, init_frame = self.cap.read()
             if not ret:
+                self.wait_init = False
                 self.event.set()
-                return
-            bbox = self.reinit_func(init_frame)
+                continue
+            bbox = self._reinit_func(init_frame)
+            print("reinit bbox")
             if not bbox:
+                print(f"no bbox, current frames:{self.update_frames}")
+                self.wait_init = False
                 self.event.set()
-                return
+                continue
             self.tracker.init(init_frame, bbox)
             self.wait_init = False
             self.event.set()
