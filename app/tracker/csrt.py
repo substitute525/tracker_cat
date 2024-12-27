@@ -1,12 +1,15 @@
 import queue
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Callable
 
 import cv2
 from numpy import ndarray
+
+logger = get_logger("csrt_tracker")
 
 class InitStrategy(Enum):
     """
@@ -57,13 +60,11 @@ class CsrtVideoStream:
             thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initBySeconds", args=(interval, strategy), daemon=True)
             self.threads.append(thread)
             thread.start()
-            ...
         elif strategy == InitStrategy.BY_UPDATE:
             interval = kwargs.get('interval')
             thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initBySeconds", args=(interval, strategy), daemon=True)
             self.threads.append(thread)
             thread.start()
-            ...
         elif strategy == InitStrategy.WHEN_FREE:
             min_interval = kwargs.get('min_interval')
             max_interval = kwargs.get('max_interval')
@@ -110,14 +111,13 @@ class CsrtVideoStream:
                 self.update_frames += 1
                 self._pool_executor.submit(self._update, time.time_ns())
             if self.wait_init:
-                print("等待重计算")
+                logger.debug("waiting for reinit")
                 self.event.wait()
                 self.event.clear()
-                print("结束等待")
+                logger.debug("continue update")
             # 按 'q' 键退出
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     break
-        print(f"update frame:{self.update_frames}, track time {time.time() - start}")
 
     def _update(self, time_ns):
         frame = self.queue.get(timeout=1)
@@ -152,12 +152,13 @@ class CsrtVideoStream:
 
     def _reinit_loop(self, interval: int, strategy: InitStrategy):
         start = time.time()
+        logger.info(f"tracker reinit strategy:{strategy.name} start")
         while True:
             if self._finished:
-                print(f"跟踪器已结束，更新策略：{strategy.name}退出")
-                return
+                logger.debug(f"main tracker finished，strategy:{strategy.name} quit")
+                break
             if self.cap is None or not self.cap.isOpened():
-                print("no cap")
+                logger.debug("no cap")
                 continue
             if strategy == InitStrategy.BY_SECONDS:
                 if (time.time() - start) < interval:
@@ -165,7 +166,8 @@ class CsrtVideoStream:
             elif strategy == InitStrategy.BY_UPDATE:
                 if self.update_frames % interval != 0 or self.update_frames == 0:
                     continue
-            print("start reinit")
+            logger.debug(f"trigger reinit, queue size {self.queue.qsize()}, unfinished tasks:{self.queue.unfinished_tasks}")
+            trigger = int(time.time() * 1000)
             # tread
             self.wait_init = True
             # 等待update完成
@@ -176,9 +178,8 @@ class CsrtVideoStream:
                 self.event.set()
                 continue
             bbox = self._reinit_func(init_frame)
-            print("reinit bbox")
             if not bbox:
-                print(f"no bbox, current frames:{self.update_frames}")
+                logger.debug(f"found none bbox, current frames:{self.update_frames}")
                 self.wait_init = False
                 self.event.set()
                 continue
@@ -186,4 +187,5 @@ class CsrtVideoStream:
             self.wait_init = False
             self.event.set()
             start = time.time()
-            print("end reinit")
+            logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
+        logger.info(f"tracker reinit strategy:{strategy.name} quit")

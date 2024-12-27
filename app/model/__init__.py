@@ -5,6 +5,7 @@ import numpy
 import numpy as np
 from numpy import ndarray
 
+logger = get_logger("model")
 
 class IModel:
     def reset_blob(self, file) -> _typing.Any:
@@ -62,15 +63,14 @@ def yolo_most_like_box(model: IModel, file, class_id:int=None, confidence:float=
     imread:ndarray = model.reset_blob(file)
     h, w = imread.shape[:2]
     layers = model.get_out_layers()
-    print(layers)
     outputs = model.forward(layers)
     class_names = model.class_names()
     boxes, confidences, class_ids = model.output_process(outputs, confidence=confidence, w=w, h=h, class_id=class_id)
     if not class_ids:
+        logger.debug(f"yolo forward noting, assigned class id: {class_id}")
         return imread, None
     index = np.argmax(numpy.array(confidences))
-    class_id = class_names[class_ids[index]]
-    print(confidences[index], class_id)
+    logger.debug(f"the most likely class id: {class_names[class_ids[index]]}")
     box = boxes[index]
     return imread, box
 

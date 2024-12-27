@@ -6,6 +6,7 @@ from numpy import ndarray
 
 from app.model import IModel
 
+logger = get_logger("yolo4")
 
 class Yolo4(IModel):
     def __init__(self):
@@ -41,6 +42,7 @@ class Yolo4(IModel):
         w = kwargs.get('w')
         h = kwargs.get('h')
         class_id = kwargs.get('class_id')
+        logger.debug(f"assigned class_id: {class_id}")
         # 输出结果处理，保留高置信度
         boxes = []
         confidences = []

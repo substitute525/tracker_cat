@@ -1,3 +1,6 @@
+from app import config
+config.init_config()
+
 import time
 
 import cv2
