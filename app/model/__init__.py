@@ -67,7 +67,7 @@ def yolo_most_like_box(model: IModel, file, class_id:int=None, confidence:float=
     class_names = model.class_names()
     boxes, confidences, class_ids = model.output_process(outputs, confidence=confidence, w=w, h=h, class_id=class_id)
     if not class_ids:
-        logger.debug(f"yolo forward noting, assigned class id: {class_id}")
+        logger.debug(f"yolo forward nothing, assigned class id: {class_id}")
         return imread, None
     index = np.argmax(numpy.array(confidences))
     logger.debug(f"the most likely class id: {class_names[class_ids[index]]}")

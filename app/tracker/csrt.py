@@ -1,7 +1,6 @@
 import queue
 import threading
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Callable
@@ -15,7 +14,7 @@ class InitStrategy(Enum):
     """
     重新标记策略
     """
-    BY_SECONDS = 1  # 按秒
+    BY_MILL_SECONDS = 1  # 按毫秒
     BY_UPDATE = 2   # 按更新次数
     WHEN_FREE = 3   # 当空闲时（可指定最小时间间隔和最大间隔）
     WHEN_LOST = 4   # 当跟踪失败时（可指定最小时间间隔和最大间隔）
@@ -25,11 +24,12 @@ class CsrtVideoStream:
     tracker = None
     queue = None
     _reinit_func = None
-    wait_init = False
-    event = threading.Event()
+    wait_init = threading.Lock()
     threads = []
     update_frames = 0
     _finished = False
+    last_init_time = 0
+    guarantee_inited = False
 
     def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1):
         """
@@ -52,23 +52,28 @@ class CsrtVideoStream:
         """
         重计算策略(多次调用会导致多个策略同时进行)
         :param strategy: 计算策略
-        :param kwargs: 策略参数。
+        :param kwargs: 策略参数。最小间隔控制在100ms以上，否则可能出现线程冲突
         :return:
         """
-        if strategy == InitStrategy.BY_SECONDS:
+        if strategy == InitStrategy.BY_MILL_SECONDS:
             interval = kwargs.get('interval')
-            thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initBySeconds", args=(interval, strategy), daemon=True)
+            thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByMillSeconds", args=(interval, strategy), daemon=True)
             self.threads.append(thread)
-            thread.start()
         elif strategy == InitStrategy.BY_UPDATE:
             interval = kwargs.get('interval')
-            thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initBySeconds", args=(interval, strategy), daemon=True)
+            thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByUpdate", args=(interval, strategy), daemon=True)
             self.threads.append(thread)
-            thread.start()
         elif strategy == InitStrategy.WHEN_FREE:
             min_interval = kwargs.get('min_interval')
+            if min_interval is None:
+                min_interval = 100
             max_interval = kwargs.get('max_interval')
-            ...
+            if min_interval is None:
+                min_interval = 0
+            thread1 = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByFree", args=(max_interval, strategy), daemon=True)
+            thread2 = threading.Thread(target=self._reinit_free, name="csrtVideoStram-initWhenFree", args=([min_interval]), daemon=True)
+            self.threads.append(thread1)
+            self.threads.append(thread2)
         elif strategy == InitStrategy.WHEN_LOST:
             min_interval = kwargs.get('min_interval')
             max_interval = kwargs.get('max_interval')
@@ -88,6 +93,10 @@ class CsrtVideoStream:
         if not bbox:
             return
         self.tracker.init(frame, bbox)
+        if self.threads and self.threads.__len__() > 0:
+            logger.info(f"tracker begin, have {self.threads.__len__()} re_init_strategy")
+            for thread in self.threads:
+                thread.start()
         self._track()
         self._finished = True
         self.queue.join()
@@ -110,11 +119,11 @@ class CsrtVideoStream:
                 self.queue.put(frame)
                 self.update_frames += 1
                 self._pool_executor.submit(self._update, time.time_ns())
-            if self.wait_init:
+            if self.wait_init.locked():
                 logger.debug("waiting for reinit")
-                self.event.wait()
-                self.event.clear()
-                logger.debug("continue update")
+                # 此处获取锁可能导致reinit跳过
+                with self.wait_init:
+                    logger.debug("continue update")
             # 按 'q' 键退出
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     break
@@ -148,44 +157,99 @@ class CsrtVideoStream:
         释放当前跟踪器的资源
         """
         self.cap.release()
-        cv2.destroyAllWindows()
 
     def _reinit_loop(self, interval: int, strategy: InitStrategy):
-        start = time.time()
+        """
+        循环更新策略
+        :param interval: 更新间隔
+        :param strategy: 更新策略
+        """
+        if not interval or interval == 0 :
+            logger.info(f"tracker reinit strategy:{strategy.name} has no interval, quit")
+            return
+        start = int(time.time() * 1000)
         logger.info(f"tracker reinit strategy:{strategy.name} start")
+        def continue_loop():
+            nonlocal start
+            start = int(time.time() * 1000)
+
         while True:
             if self._finished:
-                logger.debug(f"main tracker finished，strategy:{strategy.name} quit")
+                logger.debug(f"main tracker finished,strategy:{strategy.name} quit")
                 break
             if self.cap is None or not self.cap.isOpened():
                 logger.debug("no cap")
                 continue
-            if strategy == InitStrategy.BY_SECONDS:
-                if (time.time() - start) < interval:
+            if strategy == InitStrategy.BY_MILL_SECONDS:
+                if (int(time.time() * 1000) - start) < interval:
                     continue
             elif strategy == InitStrategy.BY_UPDATE:
                 if self.update_frames % interval != 0 or self.update_frames == 0:
                     continue
+            elif strategy == InitStrategy.WHEN_FREE:
+                now = int(time.time() * 1000)
+                if not self.last_init_time :
+                    self.last_init_time = now
+                if now - self.last_init_time > interval:
+                    logger.debug(f"No idle state in {interval} milliseconds, guaranteed init starts")
+                else:
+                    continue
             logger.debug(f"trigger reinit, queue size {self.queue.qsize()}, unfinished tasks:{self.queue.unfinished_tasks}")
             trigger = int(time.time() * 1000)
             # tread
-            self.wait_init = True
-            # 等待update完成
-            self.queue.join()
-            ret, init_frame = self.cap.read()
-            if not ret:
-                self.wait_init = False
-                self.event.set()
+            if not self.wait_init.acquire(blocking=False):
+                logger.debug("reinit triggered by other thread")
+                start = int(time.time() * 1000)
                 continue
-            bbox = self._reinit_func(init_frame)
-            if not bbox:
-                logger.debug(f"found none bbox, current frames:{self.update_frames}")
-                self.wait_init = False
-                self.event.set()
-                continue
-            self.tracker.init(init_frame, bbox)
-            self.wait_init = False
-            self.event.set()
-            start = time.time()
-            logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
+            try:
+                self.last_init_time = int(time.time() * 1000)
+                # 等待update完成
+                self.queue.join()
+                logger.debug("waiting reinit finished")
+                ret, init_frame = self.cap.read()
+                if not ret:
+                    logger.debug(f"no frame,continue")
+                    continue_loop()
+                    continue
+                bbox = self._reinit_func(init_frame)
+                if not bbox:
+                    logger.debug(f"found none bbox, current frames:{self.update_frames}")
+                    continue_loop()
+                    continue
+                self.tracker.init(init_frame, bbox)
+                continue_loop()
+                logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
+            finally:
+                self.wait_init.release()
         logger.info(f"tracker reinit strategy:{strategy.name} quit")
+
+    def _reinit_free(self, min_interval: int):
+        if not self.last_init_time:
+            self.last_init_time = int(time.time() * 1000)
+        while True:
+            self.queue.join()
+            if self._finished:
+                logger.info(f"main tracker finished, quit")
+                break
+            if int(time.time() * 1000) - self.last_init_time <= min_interval or self.wait_init.locked():
+                continue
+            if not self.wait_init.acquire(blocking=False):
+                logger.debug("reinit triggered by other thread")
+                continue
+            try:
+                self.last_init_time = int(time.time() * 1000)
+                logger.info("trigger reinit by strategy: WHEN_FREE")
+                self.queue.join()
+                trigger = int(time.time() * 1000)
+                ret, init_frame = self.cap.read()
+                if not ret:
+                    logger.debug(f"no frame,continue")
+                    continue
+                bbox = self._reinit_func(init_frame)
+                if not bbox:
+                    logger.debug(f"found none bbox, current frames:{self.update_frames}")
+                    continue
+                self.tracker.init(init_frame, bbox)
+                logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
+            finally:
+                self.wait_init.release()
