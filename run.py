@@ -1,4 +1,4 @@
-from app import tracker
+from app import track
 
 if __name__ == '__main__':
-    tracker.tracker.track(r"D:/video.mp4")
+    track.tracker.track(r"D:/video.mp4")

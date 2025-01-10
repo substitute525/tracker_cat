@@ -1,4 +1,5 @@
 import queue
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +20,12 @@ class InitStrategy(Enum):
     WHEN_FREE = 3   # 当空闲时（可指定最小时间间隔和最大间隔）
     WHEN_LOST = 4   # 当跟踪失败时（可指定最小时间间隔和最大间隔）
 
-class CsrtVideoStream:
+class ALG(Enum):
+    CSRT = "csrt"
+    MOSSE = "mosse"
+    KCF = "kcf"
+
+class VideoStream:
     cap = None
     tracker = None
     queue = None
@@ -31,7 +37,7 @@ class CsrtVideoStream:
     last_init_time = 0
     guarantee_inited = False
 
-    def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1):
+    def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1, alg: ALG = ALG.CSRT):
         """
         初始化CSRT追踪算法
 
@@ -41,12 +47,24 @@ class CsrtVideoStream:
         :param parallelism: 并行度，不建议大于2
         """
         self.cap = cv2.VideoCapture(video_source)
-        self.tracker = cv2.TrackerCSRT_create()
+        self.alg = alg
+        self.create_tracker()
+        logger.info(f"{alg} tracker initialized")
         self.queue = queue.Queue(maxsize=(parallelism if parallelism >= 1 else 0))
+        self.wait_process_frames = queue.Queue(maxsize=100)
         self._pool_executor = ThreadPoolExecutor(max_workers=parallelism)
         self.save_frames = save_frames
         self.frame_interval = interval
         self.frames = queue.PriorityQueue()
+
+    def create_tracker(self):
+        if self.alg == ALG.MOSSE:
+            create = cv2.legacy.TrackerMOSSE_create()
+            self.tracker = create
+        elif self.alg == ALG.CSRT:
+            self.tracker = cv2.TrackerCSRT_create()
+        elif self.alg == ALG.KCF:
+            self.tracker = cv2.legacy.TrackerKCF_create()
 
     def re_init_strategy(self, strategy:InitStrategy, **kwargs):
         """
@@ -79,16 +97,52 @@ class CsrtVideoStream:
             max_interval = kwargs.get('max_interval')
             ...
 
+    def _put_frame(self):
+        logger.info("begin read_frame")
+        interval = 0
+        while True:
+            if not self.cap.isOpened():
+                logger.info("Error: Cannot access the camera.")
+                self._finished = True
+                break
+            ret, frame = self.cap.read()
+            if not ret:
+                logger.info("end of read frame")
+                self._finished = True
+                break
+            if frame is None:
+                logger.info("frame is None")
+            # 抽帧
+            if interval != self.frame_interval:
+                interval += 1
+                continue
+            else:
+                interval = 0
+            self.wait_process_frames.put(frame)
+
+    def _read_frame(self):
+        while True:
+            if self._finished and self.wait_process_frames.empty():
+               return None
+            try:
+                frame = self.wait_process_frames.get(timeout=0.1)
+                if frame is not None:
+                    return frame
+            except queue.Empty:
+                continue
+
     def track(self, func: Callable[[ndarray], list[int]]):
         """
         跟踪选定框
         :param func: 计算帧的目标区域
         """
         self._finished = False
-        ret, frame = self.cap.read()
-        if not ret:
-            return
+        threading.Thread(target=self._put_frame, name="csrtVideoStram-readFrame", daemon=True).start()
+        frame = self._read_frame()
         self._reinit_func = func
+        if frame is None:
+            logger.info("no frame")
+            return
         bbox = func(frame)
         if not bbox:
             return
@@ -98,22 +152,16 @@ class CsrtVideoStream:
             for thread in self.threads:
                 thread.start()
         self._track()
-        self._finished = True
         self.queue.join()
+        logger.info(f"done, waitsize {self.wait_process_frames.qsize()}, update {self.update_frames} frames")
 
     def _track(self):
         interval = 0
         start = time.time()
         while True:
-            ret, frame = self.cap.read()
-            # 抽帧
-            if interval != self.frame_interval:
-                interval += 1
-                continue
-            else:
-                interval = 0
+            frame = self._read_frame()
             # 结束
-            if not ret:
+            if frame is None:
                 break
             else:
                 self.queue.put(frame)
@@ -140,7 +188,7 @@ class CsrtVideoStream:
         # cv2.imshow("Tracking", frame)
         # 记录所有帧
         if self.save_frames:
-            self.frames.put((time_ns, frame))
+            self.frames.put(((time_ns, self.update_frames, random.randint(1,100)), frame))
         self.queue.task_done()
 
     def next_track_frame(self, blocking=True, timeout=None):
@@ -174,7 +222,7 @@ class CsrtVideoStream:
             start = int(time.time() * 1000)
 
         while True:
-            if self._finished:
+            if self.wait_process_frames.empty() and self._finished:
                 logger.debug(f"main tracker finished,strategy:{strategy.name} quit")
                 break
             if self.cap is None or not self.cap.isOpened():
@@ -206,8 +254,8 @@ class CsrtVideoStream:
                 # 等待update完成
                 self.queue.join()
                 logger.debug("waiting reinit finished")
-                ret, init_frame = self.cap.read()
-                if not ret:
+                init_frame = self._read_frame()
+                if init_frame is None:
                     logger.debug(f"no frame,continue")
                     continue_loop()
                     continue
@@ -216,6 +264,7 @@ class CsrtVideoStream:
                     logger.debug(f"found none bbox, current frames:{self.update_frames}")
                     continue_loop()
                     continue
+                self.create_tracker()
                 self.tracker.init(init_frame, bbox)
                 continue_loop()
                 logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
@@ -228,7 +277,7 @@ class CsrtVideoStream:
             self.last_init_time = int(time.time() * 1000)
         while True:
             self.queue.join()
-            if self._finished:
+            if self.wait_process_frames.empty() and self._finished:
                 logger.info(f"main tracker finished, quit")
                 break
             if int(time.time() * 1000) - self.last_init_time <= min_interval or self.wait_init.locked():
@@ -241,14 +290,15 @@ class CsrtVideoStream:
                 logger.info("trigger reinit by strategy: WHEN_FREE")
                 self.queue.join()
                 trigger = int(time.time() * 1000)
-                ret, init_frame = self.cap.read()
-                if not ret:
+                init_frame = self._read_frame()
+                if init_frame is None:
                     logger.debug(f"no frame,continue")
                     continue
                 bbox = self._reinit_func(init_frame)
                 if not bbox:
                     logger.debug(f"found none bbox, current frames:{self.update_frames}")
                     continue
+                self.create_tracker()
                 self.tracker.init(init_frame, bbox)
                 logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
             finally:
