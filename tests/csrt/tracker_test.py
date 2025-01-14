@@ -11,7 +11,7 @@ from app.model import yolo_most_like_box
 from app.track.tracker import InitStrategy, ALG
 
 if __name__ == '__main__':
-    stream = track.tracker.VideoStream(r"D:\video.mp4", True, 0, 1, ALG.MOSSE)
+    stream = track.tracker.VideoStream(r"D:\video.mp4", save_frames = True, interval = 0, parallelism = 1, alg = ALG.MOSSE)
     total_frame = int(stream.cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = stream.cap.get(cv2.CAP_PROP_FPS)
     duration = total_frame / fps

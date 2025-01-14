@@ -28,16 +28,25 @@ class ALG(Enum):
 class VideoStream:
     cap = None
     tracker = None
-    queue = None
-    _reinit_func = None
+    update_frames = 0    # 已更新帧数
+    last_init_time = 0    # 上次更新时间
+    guarantee_inited = False    # 启动担保
+    calc_queue = None    # 计算队列
     wait_init = threading.Lock()
-    threads = []
-    update_frames = 0
-    _finished = False
-    last_init_time = 0
-    guarantee_inited = False
 
-    def __init__(self, video_source: int | str, save_frames: bool = False, interval: int=0, parallelism: int=1, alg: ALG = ALG.CSRT):
+    frame_interval = 0    # 抽帧间隔
+    alg = ALG.KCF    # 追踪算法
+    frames_buffer = None    # 视频帧缓冲队列
+    strategy_threads = []    # 策略线程
+    save_frames = False    # 是否保存处理后的帧
+    processed_frames = None    # 处理后的帧
+
+    _finished = False   # 视频是否读取完成
+    _pool_executor = None   # 计算线程池
+    _reinit_func = None # 重框选方法
+
+
+    def __init__(self, video_source: int | str, **kwargs):
         """
         初始化CSRT追踪算法
 
@@ -47,15 +56,17 @@ class VideoStream:
         :param parallelism: 并行度，不建议大于2
         """
         self.cap = cv2.VideoCapture(video_source)
-        self.alg = alg
-        self.create_tracker()
-        logger.info(f"{alg} tracker initialized")
-        self.queue = queue.Queue(maxsize=(parallelism if parallelism >= 1 else 0))
-        self.wait_process_frames = queue.Queue(maxsize=100)
+        self.alg = kwargs.get("alg", ALG.KCF)
+        self.save_frames = kwargs.get("save_frames", False)
+        parallelism = kwargs.get("parallelism", 1)
+        self.frame_interval = kwargs.get("interval", 0)
+        self.calc_queue = queue.Queue(maxsize=(parallelism if parallelism >= 1 else 0))
         self._pool_executor = ThreadPoolExecutor(max_workers=parallelism)
-        self.save_frames = save_frames
-        self.frame_interval = interval
-        self.frames = queue.PriorityQueue()
+        self.create_tracker()
+        logger.info(f"{self.alg} tracker initialized")
+        self.frames_buffer = queue.Queue(maxsize=kwargs.get("frames_buffer_size", 100))
+        if self.save_frames:
+            self.processed_frames = queue.PriorityQueue()
 
     def create_tracker(self):
         if self.alg == ALG.MOSSE:
@@ -76,11 +87,11 @@ class VideoStream:
         if strategy == InitStrategy.BY_MILL_SECONDS:
             interval = kwargs.get('interval')
             thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByMillSeconds", args=(interval, strategy), daemon=True)
-            self.threads.append(thread)
+            self.strategy_threads.append(thread)
         elif strategy == InitStrategy.BY_UPDATE:
             interval = kwargs.get('interval')
             thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByUpdate", args=(interval, strategy), daemon=True)
-            self.threads.append(thread)
+            self.strategy_threads.append(thread)
         elif strategy == InitStrategy.WHEN_FREE:
             min_interval = kwargs.get('min_interval')
             if min_interval is None:
@@ -90,11 +101,17 @@ class VideoStream:
                 min_interval = 0
             thread1 = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByFree", args=(max_interval, strategy), daemon=True)
             thread2 = threading.Thread(target=self._reinit_free, name="csrtVideoStram-initWhenFree", args=([min_interval]), daemon=True)
-            self.threads.append(thread1)
-            self.threads.append(thread2)
+            self.strategy_threads.append(thread1)
+            self.strategy_threads.append(thread2)
         elif strategy == InitStrategy.WHEN_LOST:
             min_interval = kwargs.get('min_interval')
+            if min_interval is None:
+                min_interval = 100
             max_interval = kwargs.get('max_interval')
+            if min_interval is None:
+                min_interval = 0
+            thread1 = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByFree", args=(max_interval, strategy), daemon=True)
+            self.strategy_threads.append(thread1)
             ...
 
     def _put_frame(self):
@@ -118,14 +135,14 @@ class VideoStream:
                 continue
             else:
                 interval = 0
-            self.wait_process_frames.put(frame)
+            self.frames_buffer.put(frame)
 
     def _read_frame(self):
         while True:
-            if self._finished and self.wait_process_frames.empty():
+            if self._finished and self.frames_buffer.empty():
                return None
             try:
-                frame = self.wait_process_frames.get(timeout=0.1)
+                frame = self.frames_buffer.get(timeout=0.1)
                 if frame is not None:
                     return frame
             except queue.Empty:
@@ -147,13 +164,13 @@ class VideoStream:
         if not bbox:
             return
         self.tracker.init(frame, bbox)
-        if self.threads and self.threads.__len__() > 0:
-            logger.info(f"tracker begin, have {self.threads.__len__()} re_init_strategy")
-            for thread in self.threads:
+        if self.strategy_threads and self.strategy_threads.__len__() > 0:
+            logger.info(f"tracker begin, have {self.strategy_threads.__len__()} re_init_strategy")
+            for thread in self.strategy_threads:
                 thread.start()
         self._track()
-        self.queue.join()
-        logger.info(f"done, waitsize {self.wait_process_frames.qsize()}, update {self.update_frames} frames")
+        self.calc_queue.join()
+        logger.info(f"done, waitsize {self.frames_buffer.qsize()}, update {self.update_frames} frames")
 
     def _track(self):
         interval = 0
@@ -164,7 +181,7 @@ class VideoStream:
             if frame is None:
                 break
             else:
-                self.queue.put(frame)
+                self.calc_queue.put(frame)
                 self.update_frames += 1
                 self._pool_executor.submit(self._update, time.time_ns())
             if self.wait_init.locked():
@@ -177,7 +194,7 @@ class VideoStream:
             #     break
 
     def _update(self, time_ns):
-        frame = self.queue.get(timeout=1)
+        frame = self.calc_queue.get(timeout=1)
         ret, bbox = self.tracker.update(frame)
         if ret:
             p1 = (int(bbox[0]), int(bbox[1]))
@@ -185,11 +202,13 @@ class VideoStream:
             cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
         else:
             cv2.putText(frame, "Lost Tracking", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            #是否执行LostReInit策略
+            ...
         # cv2.imshow("Tracking", frame)
         # 记录所有帧
         if self.save_frames:
-            self.frames.put(((time_ns, self.update_frames, random.randint(1,100)), frame))
-        self.queue.task_done()
+            self.processed_frames.put(((time_ns, self.update_frames, random.randint(1, 100)), frame))
+        self.calc_queue.task_done()
 
     def next_track_frame(self, blocking=True, timeout=None):
         """
@@ -198,7 +217,7 @@ class VideoStream:
         :param timeout: 超时时间
         :return: 下一帧
         """
-        return self.frames.get(blocking, timeout) if self.save_frames and not self.frames.empty() else (None,None)
+        return self.processed_frames.get(blocking, timeout) if self.save_frames and not self.processed_frames.empty() else (None, None)
 
     def release(self):
         """
@@ -222,7 +241,7 @@ class VideoStream:
             start = int(time.time() * 1000)
 
         while True:
-            if self.wait_process_frames.empty() and self._finished:
+            if self.frames_buffer.empty() and self._finished:
                 logger.debug(f"main tracker finished,strategy:{strategy.name} quit")
                 break
             if self.cap is None or not self.cap.isOpened():
@@ -242,7 +261,7 @@ class VideoStream:
                     logger.debug(f"No idle state in {interval} milliseconds, guaranteed init starts")
                 else:
                     continue
-            logger.debug(f"trigger reinit, queue size {self.queue.qsize()}, unfinished tasks:{self.queue.unfinished_tasks}")
+            logger.debug(f"trigger reinit, queue size {self.calc_queue.qsize()}, unfinished tasks:{self.calc_queue.unfinished_tasks}")
             trigger = int(time.time() * 1000)
             # tread
             if not self.wait_init.acquire(blocking=False):
@@ -252,7 +271,7 @@ class VideoStream:
             try:
                 self.last_init_time = int(time.time() * 1000)
                 # 等待update完成
-                self.queue.join()
+                self.calc_queue.join()
                 logger.debug("waiting reinit finished")
                 init_frame = self._read_frame()
                 if init_frame is None:
@@ -276,8 +295,8 @@ class VideoStream:
         if not self.last_init_time:
             self.last_init_time = int(time.time() * 1000)
         while True:
-            self.queue.join()
-            if self.wait_process_frames.empty() and self._finished:
+            self.calc_queue.join()
+            if self.frames_buffer.empty() and self._finished:
                 logger.info(f"main tracker finished, quit")
                 break
             if int(time.time() * 1000) - self.last_init_time <= min_interval or self.wait_init.locked():
@@ -288,7 +307,7 @@ class VideoStream:
             try:
                 self.last_init_time = int(time.time() * 1000)
                 logger.info("trigger reinit by strategy: WHEN_FREE")
-                self.queue.join()
+                self.calc_queue.join()
                 trigger = int(time.time() * 1000)
                 init_frame = self._read_frame()
                 if init_frame is None:
