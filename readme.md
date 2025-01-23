@@ -72,7 +72,7 @@ This project uses pyInstaller for packaging, the following is the packaging comm
 
 ### For Windows
 ``` bash
-pyinstaller --onefile --add-binary "C:\Users\HP\env\conda\envs\my_project_env\Library\bin\*.dll;." .\tests\csrt\tracker_test.py
+pyinstaller --onefile --add-binary "~\env\conda\envs\my_project_env\Library\bin\*.dll;." .\tests\csrt\tracker_test.py
 ```
 ### For Linux
 ``` bash
