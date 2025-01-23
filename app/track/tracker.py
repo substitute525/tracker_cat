@@ -24,26 +24,32 @@ class ALG(Enum):
     CSRT = "csrt"
     MOSSE = "mosse"
     KCF = "kcf"
+    GOTURN = "goturn"
+    DaSiamRPN = "dasiamrpn"
 
 class VideoStream:
     cap = None
     tracker = None
-    update_frames = 0    # 已更新帧数
-    last_init_time = 0    # 上次更新时间
+    update_frames = 0       # 已更新帧数
+    last_init_time = 0      # 上次更新时间
     guarantee_inited = False    # 启动担保
-    calc_queue = None    # 计算队列
-    wait_init = threading.Lock()
+    calc_queue = None       # 计算队列
+    wait_init = threading.Lock()    # reinit锁
+    condition = threading.Condition()    # lostReinit唤醒
 
-    frame_interval = 0    # 抽帧间隔
-    alg = ALG.KCF    # 追踪算法
+    frame_interval = 0      # 抽帧间隔
+    alg = ALG.KCF           # 追踪算法
     frames_buffer = None    # 视频帧缓冲队列
-    strategy_threads = []    # 策略线程
-    save_frames = False    # 是否保存处理后的帧
-    processed_frames = None    # 处理后的帧
+    strategy_threads = []   # 策略线程
+    save_frames = False     # 是否保存处理后的帧
+    processed_frames = None # 处理后的帧
+    lost_min_interval = 1000 # 跟踪失败初始化间隔
+    lost_reinit = False      # 跟踪失败初始化
 
-    _finished = False   # 视频是否读取完成
+    _finished = False       # 视频是否读取完成
+    calc_finished = False   # 视频是否计算完成
     _pool_executor = None   # 计算线程池
-    _reinit_func = None # 重框选方法
+    _reinit_func = None     # 重框选方法
 
 
     def __init__(self, video_source: int | str, **kwargs):
@@ -53,14 +59,15 @@ class VideoStream:
         :param video_source: 视频源
         :param save_frames: 是否保存帧
         :param interval: 抽帧间隔，0不抽帧
-        :param parallelism: 并行度，不建议大于2
+        :param parallelism: 并行度，仅推荐1
         """
         self.cap = cv2.VideoCapture(video_source)
         self.alg = kwargs.get("alg", ALG.KCF)
         self.save_frames = kwargs.get("save_frames", False)
         parallelism = kwargs.get("parallelism", 1)
         self.frame_interval = kwargs.get("interval", 0)
-        self.calc_queue = queue.Queue(maxsize=(parallelism if parallelism >= 1 else 0))
+        calc_queue_size = kwargs.get("calc_queue_size", parallelism * 2 if parallelism > 1 else 0)
+        self.calc_queue = queue.Queue(maxsize=(calc_queue_size))
         self._pool_executor = ThreadPoolExecutor(max_workers=parallelism)
         self.create_tracker()
         logger.info(f"{self.alg} tracker initialized")
@@ -72,10 +79,15 @@ class VideoStream:
         if self.alg == ALG.MOSSE:
             create = cv2.legacy.TrackerMOSSE_create()
             self.tracker = create
-        elif self.alg == ALG.CSRT:
-            self.tracker = cv2.TrackerCSRT_create()
         elif self.alg == ALG.KCF:
+            # opencv4.5.5的kcf算法多次init存在问题，在4.9版本中解决，因此此处任然使用legacy下的算法
             self.tracker = cv2.legacy.TrackerKCF_create()
+        elif self.alg == ALG.CSRT and self.tracker is None:
+            self.tracker = cv2.TrackerCSRT_create()
+        elif self.alg == ALG.GOTURN and self.tracker is None:
+            self.tracker = cv2.TrackerGOTURN_create()
+        elif self.alg == ALG.DaSiamRPN and self.tracker is None:
+            self.tracker = cv2.TrackerDaSiamRPN_create()
 
     def re_init_strategy(self, strategy:InitStrategy, **kwargs):
         """
@@ -84,6 +96,7 @@ class VideoStream:
         :param kwargs: 策略参数。最小间隔控制在100ms以上，否则可能出现线程冲突
         :return:
         """
+        logger.info(f"add reinit strategy {strategy}, kwargs={kwargs}")
         if strategy == InitStrategy.BY_MILL_SECONDS:
             interval = kwargs.get('interval')
             thread = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByMillSeconds", args=(interval, strategy), daemon=True)
@@ -110,8 +123,12 @@ class VideoStream:
             max_interval = kwargs.get('max_interval')
             if min_interval is None:
                 min_interval = 0
+            self.lost_min_interval = min_interval
+            self.lost_reinit = True
             thread1 = threading.Thread(target=self._reinit_loop, name="csrtVideoStram-initByFree", args=(max_interval, strategy), daemon=True)
+            thread2 = threading.Thread(target=self._reinit_lost, name="csrtVideoStram-initByLost", daemon=True)
             self.strategy_threads.append(thread1)
+            self.strategy_threads.append(thread2)
             ...
 
     def _put_frame(self):
@@ -173,17 +190,15 @@ class VideoStream:
         logger.info(f"done, waitsize {self.frames_buffer.qsize()}, update {self.update_frames} frames")
 
     def _track(self):
-        interval = 0
-        start = time.time()
+        self._pool_executor.submit(self._update)
         while True:
             frame = self._read_frame()
             # 结束
             if frame is None:
                 break
             else:
-                self.calc_queue.put(frame)
+                self.calc_queue.put(frame, True, 2)
                 self.update_frames += 1
-                self._pool_executor.submit(self._update, time.time_ns())
             if self.wait_init.locked():
                 logger.debug("waiting for reinit")
                 # 此处获取锁可能导致reinit跳过
@@ -193,22 +208,31 @@ class VideoStream:
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     break
 
-    def _update(self, time_ns):
-        frame = self.calc_queue.get(timeout=1)
-        ret, bbox = self.tracker.update(frame)
-        if ret:
-            p1 = (int(bbox[0]), int(bbox[1]))
-            p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-            cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, "Lost Tracking", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            #是否执行LostReInit策略
-            ...
-        # cv2.imshow("Tracking", frame)
-        # 记录所有帧
-        if self.save_frames:
-            self.processed_frames.put(((time_ns, self.update_frames, random.randint(1, 100)), frame))
-        self.calc_queue.task_done()
+    def _update(self):
+        while True:
+            if self.frames_buffer.empty() and self._finished and self.calc_queue.empty():
+                self.calc_finished = True
+                return
+            time_ns = time.time_ns()
+            try:
+                frame = self.calc_queue.get(timeout=10)
+                ret, bbox = self.tracker.update(frame)
+                if ret:
+                    p1 = (int(bbox[0]), int(bbox[1]))
+                    p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+                    cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
+                else:
+                    cv2.putText(frame, "Lost Tracking", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    # 是否执行LostReInit策略
+                    with self.condition:
+                        self.condition.notify()
+                # 记录所有帧
+                if self.save_frames:
+                    self.processed_frames.put(((time_ns, self.update_frames, random.randint(1, 100)), frame))
+                self.calc_queue.task_done()
+                ...
+            except Exception as e:
+                logger.error(e)
 
     def next_track_frame(self, blocking=True, timeout=None):
         """
@@ -307,6 +331,42 @@ class VideoStream:
             try:
                 self.last_init_time = int(time.time() * 1000)
                 logger.info("trigger reinit by strategy: WHEN_FREE")
+                self.calc_queue.join()
+                trigger = int(time.time() * 1000)
+                init_frame = self._read_frame()
+                if init_frame is None:
+                    logger.debug(f"no frame,continue")
+                    continue
+                bbox = self._reinit_func(init_frame)
+                if not bbox:
+                    logger.debug(f"found none bbox, current frames:{self.update_frames}")
+                    continue
+                self.create_tracker()
+                self.tracker.init(init_frame, bbox)
+                logger.debug(f"reinit cost {int(time.time() * 1000) - trigger}ms")
+            finally:
+                self.wait_init.release()
+
+    def _reinit_lost(self):
+        while True:
+            if not self.lost_reinit:
+                return
+            with self.condition:
+                self.condition.wait()
+            if not self.last_init_time:
+                self.last_init_time = int(time.time() * 1000)
+            if self.frames_buffer.empty() and self._finished:
+                logger.info(f"main tracker finished, quit")
+                return
+            if int(time.time() * 1000) - self.last_init_time <= self.lost_min_interval or self.wait_init.locked():
+                continue
+            if not self.wait_init.acquire(blocking=False):
+                logger.debug("reinit triggered by other thread")
+                continue
+            self.calc_queue.join()
+            try:
+                self.last_init_time = int(time.time() * 1000)
+                logger.info("trigger reinit by strategy: WHEN_LOST")
                 self.calc_queue.join()
                 trigger = int(time.time() * 1000)
                 init_frame = self._read_frame()
