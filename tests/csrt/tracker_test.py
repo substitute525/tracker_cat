@@ -20,17 +20,22 @@ from app.track.tracker import InitStrategy, ALG
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="命令行参数示例")
-    parser.add_argument("video", type=str, help="视频源")
+    parser.add_argument("video", type=str, help="Path to the input video file or Camera number")
+    parser.add_argument("classId", type=int, help="yolo model classification id. example: 15(cat)")
+    parser.add_argument("confidence", type=float, help="The model matches with minimum confidence. example: 0.1")
+
     parser.add_argument("-d", "--debug", type=bool, default=False, help="debug mode,will output the processed video stream. default: False")
     parser.add_argument("-i", "--interval", type=int, default=0, help="frame extraction interval.default: 0")
     parser.add_argument("--parallelism", type=int, default=1, help="calc threads num, Do not modify.default: 1")
     parser.add_argument("-a","--alg", type=lambda c: ALG[c.upper()], choices=list(ALG), default=ALG.KCF, help="The tracking algorithm used.default: KCF")
-    parser.add_argument("-c","--cache", type=int, default=100, help="calc queue size.default: 100")
+    parser.add_argument("--cache", type=int, default=100, help="calc queue size.default: 100")
     parser.add_argument("-b","--buffer", type=int, default=100, help="frame reade buffer.default: 100")
-    parser.add_argument("-s","--strategy", nargs="+", action="append", type=lambda c: InitStrategy[c.upper()], choices=list(InitStrategy), default=[InitStrategy.WHEN_LOST], help="reInit strategies.default: WHEN_LOST")
-    parser.add_argument("--minInterval", nargs="+", action="append", type=int, default=[1000], help="reInit strategies, size must equal with strategy.default: 1000")
-    parser.add_argument("--maxInterval", nargs="+", action="append", type=int, default=[0], help="reInit strategies, size must equal with strategy.default: 0")
-    parser.add_argument("--strategyInterval", nargs="+", action="append", type=int, default=[0], help="reInit strategies, size must equal with strategy.default: 0")
+
+    parser.add_argument("-s","--strategy", action="append", type=lambda c: InitStrategy[c.upper()], choices=list(InitStrategy), help="reInit strategies.example: InitStrategy.WHEN_LOST")
+    parser.add_argument("--minInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 1000")
+    parser.add_argument("--maxInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
+    parser.add_argument("--strategyInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
+    parser.add_argument("--strategyInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
 
     args = parser.parse_args()
     print(args)

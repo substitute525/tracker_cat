@@ -355,7 +355,7 @@ class VideoStream:
                 self.condition.wait()
             if not self.last_init_time:
                 self.last_init_time = int(time.time() * 1000)
-            if self.frames_buffer.empty() and self._finished:
+            if self.frames_buffer.empty() and self.calc_finished:
                 logger.info(f"main tracker finished, quit")
                 return
             if int(time.time() * 1000) - self.last_init_time <= self.lost_min_interval or self.wait_init.locked():
