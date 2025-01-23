@@ -35,7 +35,6 @@ if __name__ == '__main__':
     parser.add_argument("--minInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 1000")
     parser.add_argument("--maxInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
     parser.add_argument("--strategyInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
-    parser.add_argument("--strategyInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
 
     args = parser.parse_args()
     print(args)
