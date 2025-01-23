@@ -92,7 +92,7 @@ pyinstaller --onefile --add-binary "~/env/conda/envs/my_project_env/lib/*.so;." 
 ---
 
 ## **License**
-This project is released under the MIT License. Feel free to use and modify it as needed.
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
 
 ---
 
