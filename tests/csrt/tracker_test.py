@@ -35,10 +35,11 @@ if __name__ == '__main__':
     parser.add_argument("--minInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 1000")
     parser.add_argument("--maxInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
     parser.add_argument("--strategyInterval", action="append", type=int, help="reInit strategies, size must equal with strategy.example: 0")
+    parser.add_argument("--resize", nargs="+", type=int, help="Scale the video to the target size(width height). example: 1920 1080")
 
     args = parser.parse_args()
     print(args)
-    stream = track.tracker.VideoStream(args.video, save_frames = args.debug, interval = args.interval, parallelism = args.parallelism, alg = args.alg, calc_queue_size = args.cache, frames_buffer_size = args.buffer)
+    stream = track.tracker.VideoStream(args.video, save_frames = args.debug, interval = args.interval, parallelism = args.parallelism, alg = args.alg, calc_queue_size = args.cache, frames_buffer_size = args.buffer, resize = args.resize)
     total_frame = int(stream.cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = stream.cap.get(cv2.CAP_PROP_FPS)
     duration = total_frame / fps
@@ -68,6 +69,6 @@ if __name__ == '__main__':
         if frame is None:
             continue
         cv2.imshow("Tracking", frame)
-        cv2.waitKey(10)
+        cv2.waitKey(max(1, int((1/fps) * 1000)))
     stream.release()
     cv2.destroyAllWindows()

@@ -45,6 +45,8 @@ class VideoStream:
     processed_frames = None # 处理后的帧
     lost_min_interval = 1000 # 跟踪失败初始化间隔
     lost_reinit = False      # 跟踪失败初始化
+    screen_width = None     # 屏幕宽度
+    screen_height = None     # 屏幕高度
 
     _finished = False       # 视频是否读取完成
     calc_finished = False   # 视频是否计算完成
@@ -64,6 +66,12 @@ class VideoStream:
         self.cap = cv2.VideoCapture(video_source)
         self.alg = kwargs.get("alg", ALG.KCF)
         self.save_frames = kwargs.get("save_frames", False)
+        resize = kwargs.get("resize", [None, None])
+        if isinstance(resize, (list, tuple)):
+            if len(resize) == 2:
+                self.screen_width, self.screen_height = resize
+            elif len(resize) == 1:
+                self.screen_width = self.screen_height = resize[0]
         parallelism = kwargs.get("parallelism", 1)
         self.frame_interval = kwargs.get("interval", 0)
         calc_queue_size = kwargs.get("calc_queue_size", parallelism * 2 if parallelism > 1 else 0)
@@ -152,6 +160,15 @@ class VideoStream:
                 continue
             else:
                 interval = 0
+            # 缩放
+            if (self.screen_width is not None  and self.screen_height is not None
+                    and (frame.shape[1] > self.screen_width or frame.shape[0] > self.screen_height)):
+                scale_width = self.screen_width / frame.shape[1]
+                scale_height = self.screen_height / frame.shape[0]
+                scale = min(scale_width, scale_height)
+                width = int(frame.shape[1] * scale)
+                height = int(frame.shape[0] * scale)
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
             self.frames_buffer.put(frame)
 
     def _read_frame(self):
@@ -209,6 +226,7 @@ class VideoStream:
             #     break
 
     def _update(self):
+        priority = 0
         while True:
             if self.frames_buffer.empty() and self._finished and self.calc_queue.empty():
                 self.calc_finished = True
@@ -228,7 +246,10 @@ class VideoStream:
                         self.condition.notify()
                 # 记录所有帧
                 if self.save_frames:
-                    self.processed_frames.put(((time_ns, self.update_frames, random.randint(1, 100)), frame))
+                    priority = priority + 1
+                    if priority > 2**31 - 1:
+                        priority = 0
+                    self.processed_frames.put(((time_ns, self.update_frames, priority), frame))
                 self.calc_queue.task_done()
                 ...
             except Exception as e:

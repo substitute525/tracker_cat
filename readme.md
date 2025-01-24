@@ -32,25 +32,26 @@ The main script for running the pet tracking project is `tracker_test.exe`. This
 
 ### **Command Structure**
 ```bash
-.\dist\tracker_test.exe <video_path> <model_class_id> <model_confidence> -d <debug_mode> -s <strategy> --minInterval <min_time> --maxInterval <max_time> --strategyInterval <strategy_time>
+.\dist\tracker_test.exe <video_path> <model_class_id> <model_confidence> -d <debug_mode> -s <strategy> --minInterval <min_time> --maxInterval <max_time> --strategyInterval <strategy_time> --resize <width> <height>
 ```
 
 ### **Example Command**
 ```bash
-.\dist\tracker_test.exe D:\video.mp4 15 0.1 -d True -s WHEN_LOST --minInterval 500 --maxInterval 0 --strategyInterval 0
+.\dist\tracker_test.exe D:\video.mp4 15 0.1 -d True -s WHEN_LOST --minInterval 500 --maxInterval 0 --strategyInterval 0 --resize 1920 1080
 ```
 
 ### **Parameter Descriptions**
-| Parameter             | Description                                               | Example       |
-|-----------------------|-----------------------------------------------------------|---------------|
-| `<video_path>`        | Path to the input video file.                             | `D:\video.mp4` |
-| `<model_class_id>`    | The class id of the model match                           | `15`           |
-| `<model_confidence>`  | Minimum confidence of the model                           | `0.1`          |
-| `-d <debug_mode>`     | Debug mode (True/False).                                  | `True`         |
-| `-s <strategy>`       | Tracking strategy (e.g., `WHEN_LOST`, `WHEN_FREE`, etc.). | `WHEN_LOST`    |
-| `--minInterval`       | Minimum time interval (in milliseconds).                  | `500`          |
-| `--maxInterval`       | Maximum time interval (in milliseconds).                  | `0`            |
-| `--strategyInterval`  | Interval for applying strategy (in milliseconds).         | `0`            |
+| Parameter            | Description                                               | Example        |
+|----------------------|-----------------------------------------------------------|----------------|
+| `<video_path>`       | Path to the input video file.                             | `D:\video.mp4` |
+| `<model_class_id>`   | The class id of the model match                           | `15`           |
+| `<model_confidence>` | Minimum confidence of the model                           | `0.1`          |
+| `-d <debug_mode>`    | Debug mode (True/False).                                  | `True`         |
+| `-s <strategy>`      | Tracking strategy (e.g., `WHEN_LOST`, `WHEN_FREE`, etc.). | `WHEN_LOST`    |
+| `--minInterval`      | Minimum time interval (in milliseconds).                  | `500`          |
+| `--maxInterval`      | Maximum time interval (in milliseconds).                  | `0`            |
+| `--strategyInterval` | Interval for applying strategy (in milliseconds).         | `0`            |
+| `--resize`           | Scale the video to the target size.                       | `1920 1080`    |
 Use the ```.\dist\tracker_test.exe --help``` command to know more
 
 ---
