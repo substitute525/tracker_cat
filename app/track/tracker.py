@@ -1,5 +1,6 @@
 import queue
 import random
+import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -53,6 +54,9 @@ class VideoStream:
     _pool_executor = None   # 计算线程池
     _reinit_func = None     # 重框选方法
 
+    def signal_handler(self):
+        self._finished = True
+        self.calc_finished = True
 
     def __init__(self, video_source: int | str, **kwargs):
         """
@@ -63,6 +67,7 @@ class VideoStream:
         :param interval: 抽帧间隔，0不抽帧
         :param parallelism: 并行度，仅推荐1
         """
+        signal.signal(signal.SIGINT, self.signal_handler)
         self.cap = cv2.VideoCapture(video_source)
         self.alg = kwargs.get("alg", ALG.KCF)
         self.save_frames = kwargs.get("save_frames", False)
@@ -137,12 +142,13 @@ class VideoStream:
             thread2 = threading.Thread(target=self._reinit_lost, name="csrtVideoStram-initByLost", daemon=True)
             self.strategy_threads.append(thread1)
             self.strategy_threads.append(thread2)
-            ...
 
     def _put_frame(self):
         logger.info("begin read_frame")
         interval = 0
         while True:
+            if self._finished:
+                break
             if not self.cap.isOpened():
                 logger.info("Error: Cannot access the camera.")
                 self._finished = True

@@ -1,3 +1,4 @@
+import signal
 import threading
 import argparse
 
@@ -63,6 +64,14 @@ if __name__ == '__main__':
         track_thread.join()
         print(f'track cost:{time.time() - start}, total frame:{total_frame}, fps:{fps}, video duration:{duration}')
     threading.Thread(target=log).start()
+
+
+    def signal_handler():
+        print("程序被手动中断，退出")
+        stream.release()
+        cv2.destroyAllWindows()
+        sys.exit(0)  # 退出程序
+    signal.signal(signal.SIGINT, signal_handler)
 
     while True:
         _, frame = stream.next_track_frame()
