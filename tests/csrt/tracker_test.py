@@ -39,7 +39,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
-    stream = track.tracker.VideoStream(int(args.video) if args.video.isdigit() else args.video, save_frames = args.debug, interval = args.interval, parallelism = args.parallelism, alg = args.alg, calc_queue_size = args.cache, frames_buffer_size = args.buffer, resize = args.resize)
+    stream = track.tracker.VideoStream(int(args.video) if args.video.isdigit() else args.video, save_frames = args.debug,
+                                       interval = args.interval, parallelism = args.parallelism, alg = args.alg,
+                                       calc_queue_size = args.cache, frames_buffer_size = args.buffer, resize = args.resize)
     total_frame = int(stream.cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = stream.cap.get(cv2.CAP_PROP_FPS)
     duration = 0 if fps == 0 else total_frame / fps
