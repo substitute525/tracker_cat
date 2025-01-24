@@ -182,6 +182,17 @@ class VideoStream:
             except queue.Empty:
                 continue
 
+    def _read_last_frame(self):
+        while True:
+            if self._finished or self.frames_buffer.empty():
+               return None
+            try:
+                frame = self.frames_buffer.queue[-1]
+                self.frames_buffer = queue.Queue(maxsize = self.frames_buffer.maxsize)
+                return frame
+            except queue.Empty:
+                continue
+
     def track(self, func: Callable[[ndarray], list[int]]):
         """
         跟踪选定框
@@ -189,14 +200,17 @@ class VideoStream:
         """
         self._finished = False
         threading.Thread(target=self._put_frame, name="csrtVideoStram-readFrame", daemon=True).start()
-        frame = self._read_frame()
-        self._reinit_func = func
-        if frame is None:
-            logger.info("no frame")
-            return
-        bbox = func(frame)
-        if not bbox:
-            return
+        while True:
+            frame = self._read_last_frame()
+            self._reinit_func = func
+            if self._finished:
+                logger.info("no frame")
+                return
+            if frame is None:
+                continue
+            bbox = func(frame)
+            if not bbox:
+                continue
         self.tracker.init(frame, bbox)
         if self.strategy_threads and self.strategy_threads.__len__() > 0:
             logger.info(f"tracker begin, have {self.strategy_threads.__len__()} re_init_strategy")
@@ -214,7 +228,7 @@ class VideoStream:
             if frame is None:
                 break
             else:
-                self.calc_queue.put(frame, True, 2)
+                self.calc_queue.put(frame)
                 self.update_frames += 1
             if self.wait_init.locked():
                 logger.debug("waiting for reinit")
@@ -235,21 +249,22 @@ class VideoStream:
             try:
                 frame = self.calc_queue.get(timeout=10)
                 ret, bbox = self.tracker.update(frame)
-                if ret:
-                    p1 = (int(bbox[0]), int(bbox[1]))
-                    p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
-                    cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
-                else:
-                    cv2.putText(frame, "Lost Tracking", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                    # 是否执行LostReInit策略
-                    with self.condition:
-                        self.condition.notify()
-                # 记录所有帧
                 if self.save_frames:
+                    if ret:
+                        p1 = (int(bbox[0]), int(bbox[1]))
+                        p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+                        cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
+                    else:
+                        cv2.putText(frame, "Lost Tracking", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    # 记录所有帧
                     priority = priority + 1
                     if priority > 2**31 - 1:
                         priority = 0
                     self.processed_frames.put(((time_ns, self.update_frames, priority), frame))
+                if not ret:
+                    # 是否执行LostReInit策略
+                    with self.condition:
+                        self.condition.notify()
                 self.calc_queue.task_done()
                 ...
             except Exception as e:
