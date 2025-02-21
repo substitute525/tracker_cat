@@ -87,6 +87,7 @@ class VideoStream:
         self.frames_buffer = queue.Queue(maxsize=kwargs.get("frames_buffer_size", 100))
         if self.save_frames:
             self.processed_frames = queue.PriorityQueue()
+        self.position = queue.PriorityQueue()
 
     def create_tracker(self):
         if self.alg == ALG.MOSSE:
@@ -217,6 +218,8 @@ class VideoStream:
             bbox = func(frame)
             if not bbox:
                 continue
+            else:
+                break
         self.tracker.init(frame, bbox)
         if self.strategy_threads and self.strategy_threads.__len__() > 0:
             logger.info(f"tracker begin, have {self.strategy_threads.__len__()} re_init_strategy")
@@ -255,18 +258,23 @@ class VideoStream:
             try:
                 frame = self.calc_queue.get(timeout=10)
                 ret, bbox = self.tracker.update(frame)
-                if self.save_frames:
-                    if ret:
-                        p1 = (int(bbox[0]), int(bbox[1]))
-                        p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+                if ret:
+                    p1 = (int(bbox[0]), int(bbox[1]))
+                    p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
+                    center = (int(bbox[0] + bbox[2] / 2), int(bbox[1] + bbox[3] / 2))
+                    self.position.put(((time_ns, self.update_frames, priority), center))
+                    if self.save_frames:
                         cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
-                    else:
+                        self.processed_frames.put(((time_ns, self.update_frames, priority), frame))
+                else:
+                    self.position.put(((time_ns, self.update_frames, priority), None))
+                    if self.save_frames:
                         cv2.putText(frame, "Lost Tracking", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                    # 记录所有帧
-                    priority = priority + 1
-                    if priority > 2**31 - 1:
-                        priority = 0
-                    self.processed_frames.put(((time_ns, self.update_frames, priority), frame))
+                        self.processed_frames.put(((time_ns, self.update_frames, priority), frame))
+                # 记录所有帧
+                priority = priority + 1
+                if priority > 2**31 - 1:
+                    priority = 0
                 if not ret:
                     # 是否执行LostReInit策略
                     with self.condition:
@@ -284,6 +292,15 @@ class VideoStream:
         :return: 下一帧
         """
         return self.processed_frames.get(blocking, timeout) if self.save_frames and not self.processed_frames.empty() else (None, None)
+
+    def next_position(self, blocking=True, timeout=None):
+        """
+        获取处理后的下一帧（若开启了save_frames）
+        :param blocking: 阻塞获取
+        :param timeout: 超时时间
+        :return: 下一帧
+        """
+        return self.position.get(blocking, timeout) if not self.processed_frames.empty() else (None, None)
 
     def release(self):
         """
