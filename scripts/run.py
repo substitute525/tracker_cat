@@ -82,7 +82,7 @@ if __name__ == '__main__':
 
 
     while True:
-        _, frame = stream.next_position()
+        _, frame = stream.next_track_frame()
         if frame is None and not track_thread.is_alive():
             break
         if frame is None:
