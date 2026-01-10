@@ -60,10 +60,10 @@ if __name__ == '__main__':
     maxInterval = list(parser_args.maxInterval)
     interval = list(parser_args.strategyInterval)
     for i, strategy in enumerate(strategies):
-        stream.re_init_strategy(strategy=strategy, min_interval=minInterval[i], max_interval=maxInterval[i], interval=interval[i])
+        stream.add_reinit_strategy(strategy=strategy, min_interval=minInterval[i], max_interval=maxInterval[i], interval=interval[i])
     track_thread = threading.Thread(
         target=stream.track,
-        args=(lambda frm: yolo_most_like_box(yolo_, frm, confidence=0.1, class_id=15)[1],)
+        args=(lambda frm: yolo_most_like_box(yolo_, frm, confidence=0.1, class_id=parser_args.classId)[1],)
     )
     track_thread.start()
     def log():
@@ -73,21 +73,31 @@ if __name__ == '__main__':
 
     def move():
         while True:
-            _, position = stream.next_position()
+            position = stream.next_position()
             if position is None:
-                print("无位置信息")
+                pass
+                # print("无位置信息")
             else:
-                print(position)
+                pass
+                # print(position)
     threading.Thread(target=move).start()
 
-
+    # 提前计算每帧应有的持续时间（秒）
+    frame_duration = 1.0 / fps
     while True:
-        _, frame = stream.next_track_frame()
+        start_time = time.time()  # 记录开始时间
+        frame = stream.next_track_frame()
         if frame is None and not track_thread.is_alive():
             break
         if frame is None:
             continue
         cv2.imshow("Tracking", frame)
-        cv2.waitKey(max(1, int((1/fps) * 1000)))
+        # 计算处理这一帧已经花了多少时间
+        elapsed_time = time.time() - start_time
+        # 动态计算还需要等待多久，如果处理太慢，则只等 1ms
+        wait_ms = max(1, int((frame_duration - elapsed_time) * 1000))
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
     stream.release()
     cv2.destroyAllWindows()

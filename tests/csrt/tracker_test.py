@@ -57,7 +57,7 @@ if __name__ == '__main__':
         stream.re_init_strategy(strategy=strategy, min_interval=minInterval[i], max_interval=maxInterval[i], interval=interval[i])
     track_thread = threading.Thread(
         target=stream.track,
-        args=(lambda frm: yolo_most_like_box(yolo_, frm, confidence=0.1, class_id=15)[1],)
+        args=(lambda frm: yolo_most_like_box(yolo_, frm, confidence=0.1, class_id=parser_args.classId)[1],)
     )
     track_thread.start()
     def log():
