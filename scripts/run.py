@@ -79,7 +79,7 @@ if __name__ == '__main__':
                 # print("无位置信息")
             else:
                 pass
-                # print(position)
+                print(position)
     threading.Thread(target=move).start()
 
     # 提前计算每帧应有的持续时间（秒）

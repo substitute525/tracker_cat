@@ -153,13 +153,13 @@ class RealTimeTracker:
                             # 计算中心点
                             center_x = int(bbox[0] + bbox[2] / 2)
                             center_y = int(bbox[1] + bbox[3] / 2)
-                            self.tracking_position = (center_x, center_y)
+                            self.tracking_position = [(center_x, center_y), 0]
 
                             # 绘制结果
                             p1 = (int(bbox[0]), int(bbox[1]))
                             p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
                             cv2.rectangle(current_frame, p1, p2, (0, 255, 0), 2)
-                            cv2.circle(current_frame, self.tracking_position, 5, (0, 0, 255), -1)
+                            cv2.circle(current_frame, self.tracking_position[0], 5, (0, 0, 255), -1)
                         else:
                             # 追踪失败
                             self.current_bbox = None
@@ -288,7 +288,7 @@ class RealTimeTracker:
                         # 计算中心点
                         center_x = int(bbox[0] + bbox[2] / 2)
                         center_y = int(bbox[1] + bbox[3] / 2)
-                        self.tracking_position = (center_x, center_y)
+                        self.tracking_position = [(center_x, center_y), 1]
                         self.last_init_time = current_time
                         logger.debug(f"Tracker reinitialized at frame {self.frame_count}")
             except Exception as e:
